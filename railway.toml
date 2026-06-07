@@ -1,12 +1,4 @@
-[build]
-builder = "nixpacks"
-buildCommand = "pip install -r requirements.txt"
-
 [deploy]
-startCommand = "python main.py"
+startCommand = "cd backend && python3 main.py"
 healthcheckPath = "/health"
 healthcheckTimeout = 30
-restartPolicyType = "on_failure"
-
-[nixpacks]
-providers = ["python"]
