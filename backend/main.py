@@ -298,7 +298,8 @@ def catalog_download_full():
     if not aid: return jsonify({"error":"asset_id required"}),400
     try:
         s = get_scraper()
-        d = rpost("https://catalog.roblox.com/v1/catalog/items/details",{"items":[{"itemType":"Asset","id":int(aid)}]})
+        r = s.post("https://catalog.roblox.com/v1/catalog/items/details", json={"items":[{"itemType":"Asset","id":int(aid)}]}, timeout=10)
+        d = r.json()
         item = (d.get("data") or [{}])[0]
         if not item: return jsonify({"error":f"Asset {aid} tidak ditemukan"}),404
         name = item.get("name",f"asset_{aid}")
