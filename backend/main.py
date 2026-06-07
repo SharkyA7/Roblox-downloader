@@ -30,6 +30,7 @@ def get_scraper():
 def hdr(auth=False):
     h = {"User-Agent":"Mozilla/5.0","Accept":"application/json"}
     if auth and COOKIE: h["Cookie"] = f".ROBLOSECURITY={COOKIE}"
+    if API_KEY: h["x-api-key"] = API_KEY
     return h
 
 def rget(url):
