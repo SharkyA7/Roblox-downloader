@@ -679,8 +679,6 @@ if __name__ == "__main__":
     print(f"Server jalan di http://0.0.0.0:{port}")
     app.run(host="0.0.0.0",port=port,debug=False)
 
-# Railway / production WSGI entry point
-application = app
 
 @app.get("/api/audio/info")
 def audio_info():
@@ -747,3 +745,6 @@ def audio_download():
         return Response(buf.read(), mimetype="application/zip",
             headers={"Content-Disposition": f'attachment; filename="{safe}_audio.zip"'})
     except Exception as e: return jsonify({"error":str(e)}),500
+
+# Railway / production WSGI entry point
+application = app
