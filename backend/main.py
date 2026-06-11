@@ -162,6 +162,10 @@ def procedural(av,name):
 def health():
     return jsonify({"status":"ok","cookie_set":bool(COOKIE),"maintenance":MAINTENANCE})
 
+
+@app.get("/api/audio/ping")
+def audio_ping():
+    return jsonify({"status":"audio ok"})
 @app.get("/api/avatar/info")
 def avatar_info():
     user=request.args.get("user","")
