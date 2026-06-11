@@ -25,6 +25,7 @@ h1{font-family:'Press Start 2P',monospace;font-size:clamp(12px,2.5vw,20px);color
 main{max-width:860px;margin:0 auto;padding:24px 16px 80px}
 .tabs{display:flex;gap:0;margin-bottom:20px;border-bottom:2px solid var(--gray2)}
 .tab{flex:1;text-align:center;padding:12px;font-family:'Press Start 2P',monospace;font-size:9px;
+.tab-dropdown{position:relative;flex:1}.dropdown-menu{position:absolute;top:100%;right:0;background:var(--s1);border:1px solid var(--gray2);border-radius:4px;z-index:100;min-width:140px}.dropdown-item{padding:10px 14px;font-family:"Press Start 2P",monospace;font-size:8px;color:var(--gray);cursor:pointer;white-space:nowrap}.dropdown-item:hover{background:var(--s2);color:var(--red)}
      color:var(--gray);cursor:pointer;transition:all .2s;letter-spacing:1px;border-bottom:2px solid transparent;margin-bottom:-2px}
 .tab:hover{color:var(--white)}
 .tab.active{color:var(--red);border-bottom-color:var(--red)}
@@ -242,7 +243,13 @@ footer{text-align:center;padding:18px;font-size:9px;color:var(--gray);border-top
     <div class="tab active" onclick="switchTab('avatar')">👤 AVATAR</div>
     <div class="tab" onclick="switchTab('catalog')">🛍️ KATALOG</div>
     <div class="tab" onclick="switchTab('audio')">🎵 AUDIO</div>
-    <div class="tab" onclick="switchTab('api')">📡 API DOCS</div>
+    <div class="tab-dropdown">
+      <button class="tab" onclick="toggleDropdown()">⚙️ MORE ▼</button>
+      <div class="dropdown-menu" id="dropdown-menu" style="display:none">
+        <div class="dropdown-item" onclick="switchTab('texture');toggleDropdown()">🎨 TEXTURE</div>
+        <div class="dropdown-item" onclick="switchTab('api');toggleDropdown()">📡 API DOCS</div>
+      </div>
+    </div>
   </div>
 
   <!-- ── AVATAR PANEL ── -->
@@ -397,6 +404,27 @@ footer{text-align:center;padding:18px;font-size:9px;color:var(--gray);border-top
   </div>
 
   <!-- ── API PANEL ── -->
+  <!-- ── TEXTURE PANEL ── -->
+  <div class="panel" id="panel-texture">
+    <div class="card">
+      <div class="label">🎨 TEXTURE MAP GENERATOR</div>
+      <p style="font-size:9px;color:var(--gray);margin-bottom:12px;line-height:1.8">Upload texture untuk generate Normal, Roughness, AO, dan Height map. Cocok untuk Nomad Sculpt dan Prisma 3D.</p>
+      <input type="file" id="tex-input" accept="image/*" onchange="loadTexture(event)" style="display:none">
+      <button class="btn" onclick="document.getElementById('tex-input').click()">📁 UPLOAD TEXTURE</button>
+      <div id="tex-status" style="margin-top:8px;font-size:9px;color:var(--gray)"></div>
+    </div>
+    <div class="card" id="tex-result" style="display:none">
+      <div class="label">PREVIEW</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px">
+        <div><p style="font-size:8px;color:var(--gray);margin-bottom:4px">ALBEDO</p><canvas id="canvas-albedo" style="width:100%;border-radius:4px"></canvas></div>
+        <div><p style="font-size:8px;color:var(--gray);margin-bottom:4px">NORMAL</p><canvas id="canvas-normal" style="width:100%;border-radius:4px"></canvas></div>
+        <div><p style="font-size:8px;color:var(--gray);margin-bottom:4px">ROUGHNESS</p><canvas id="canvas-roughness" style="width:100%;border-radius:4px"></canvas></div>
+        <div><p style="font-size:8px;color:var(--gray);margin-bottom:4px">AO</p><canvas id="canvas-ao" style="width:100%;border-radius:4px"></canvas></div>
+      </div>
+      <button class="btn btn-green" onclick="downloadTextures()">⬇ DOWNLOAD ALL MAPS (ZIP)</button>
+    </div>
+  </div>
+
   <div class="panel" id="panel-api">
     <div class="card">
       <div class="label">ENDPOINT API</div>
@@ -429,7 +457,17 @@ const BASE = 'https://web-production-62c2e.up.railway.app';
 
 // ── TABS ──────────────────────────────────────────────────────────
 function switchTab(name){
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['avatar','catalog','audio','api'][i]===name));
+function toggleDropdown(){
+  const m=document.getElementById("dropdown-menu");
+  m.style.display=m.style.display==="none"?"block":"none";
+}
+document.addEventListener("click",function(e){
+  if(!e.target.closest(".tab-dropdown")){
+    const m=document.getElementById("dropdown-menu");
+    if(m) m.style.display="none";
+  }
+});
+  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['avatar','catalog','audio','api','texture'][i]===name));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   document.getElementById('panel-'+name).classList.add('active');
 }
@@ -869,6 +907,109 @@ async function downloadAudio(){
 }
 
 document.getElementById("audio-input").addEventListener("keydown",e=>{ if(e.key==="Enter") fetchAudio(); });
+
+// ── TEXTURE GENERATOR ────────────────────────────────────────────
+let texCanvas = null;
+
+function loadTexture(event){
+  const file = event.target.files[0];
+  if(!file) return;
+  document.getElementById("tex-status").textContent = "Loading texture...";
+  const img = new Image();
+  const url = URL.createObjectURL(file);
+  img.onload = function(){
+    texCanvas = document.createElement("canvas");
+    texCanvas.width = img.width;
+    texCanvas.height = img.height;
+    const ctx = texCanvas.getContext("2d");
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+    generateMaps(texCanvas);
+    document.getElementById("tex-result").style.display = "block";
+    document.getElementById("tex-status").textContent = "✓ Texture loaded: "+img.width+"x"+img.height;
+  };
+  img.src = url;
+}
+
+function generateMaps(src){
+  const w = src.width, h = src.height;
+  const ctx = src.getContext("2d");
+  const data = ctx.getImageData(0,0,w,h).data;
+
+  // Albedo
+  drawToCanvas("canvas-albedo", src);
+
+  // Grayscale helper
+  function gray(i){ return 0.299*data[i]+0.587*data[i+1]+0.114*data[i+2]; }
+
+  // Normal map
+  const nrm = new ImageData(w,h);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const l=gray(((y*w+Math.max(x-1,0))*4));
+      const r=gray(((y*w+Math.min(x+1,w-1))*4));
+      const u=gray(((Math.max(y-1,0)*w+x)*4));
+      const d=gray(((Math.min(y+1,h-1)*w+x)*4));
+      const nx=((l-r)/255)*0.5+0.5;
+      const ny=((u-d)/255)*0.5+0.5;
+      const i=(y*w+x)*4;
+      nrm.data[i]=nx*255; nrm.data[i+1]=ny*255; nrm.data[i+2]=255; nrm.data[i+3]=255;
+    }
+  }
+  putImageData("canvas-normal",nrm,w,h);
+
+  // Roughness map (inverted grayscale)
+  const rgh = new ImageData(w,h);
+  for(let i=0;i<data.length;i+=4){
+    const g=255-gray(i);
+    rgh.data[i]=rgh.data[i+1]=rgh.data[i+2]=g; rgh.data[i+3]=255;
+  }
+  putImageData("canvas-roughness",rgh,w,h);
+
+  // AO map (darkened edges)
+  const ao = new ImageData(w,h);
+  for(let y=0;y<h;y++){
+    for(let x=0;x<w;x++){
+      const i=(y*w+x)*4;
+      const c=gray(i);
+      const edge=Math.abs(c-(y>0?gray(((y-1)*w+x)*4):c))+Math.abs(c-(x>0?gray((y*w+x-1)*4):c));
+      const ao_val=Math.max(0,c-edge*2);
+      ao.data[i]=ao.data[i+1]=ao.data[i+2]=ao_val; ao.data[i+3]=255;
+    }
+  }
+  putImageData("canvas-ao",ao,w,h);
+}
+
+function drawToCanvas(id, src){
+  const c = document.getElementById(id);
+  c.width=src.width; c.height=src.height;
+  c.getContext("2d").drawImage(src,0,0);
+}
+
+function putImageData(id,imgData,w,h){
+  const c=document.getElementById(id);
+  c.width=w; c.height=h;
+  c.getContext("2d").putImageData(imgData,0,0);
+}
+
+async function downloadTextures(){
+  if(!texCanvas){return;}
+  document.getElementById("tex-status").textContent="Generating ZIP...";
+  const zip = new JSZip();
+  const ids = ["albedo","normal","roughness","ao"];
+  for(const id of ids){
+    const c = document.getElementById("canvas-"+id);
+    const blob = await new Promise(r=>c.toBlob(r,"image/png"));
+    zip.file(id+".png", blob);
+  }
+  const content = await zip.generateAsync({type:"blob"});
+  const a = Object.assign(document.createElement("a"),{
+    href: URL.createObjectURL(content),
+    download: "texture_maps.zip"
+  });
+  a.click(); URL.revokeObjectURL(a.href);
+  document.getElementById("tex-status").textContent="✓ Download selesai!";
+}
 </script>
 </body>
 </html>
