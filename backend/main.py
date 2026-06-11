@@ -748,3 +748,7 @@ def audio_download():
 
 # Railway / production WSGI entry point
 application = app
+
+@app.get("/api/audio/test")
+def audio_test():
+    return jsonify({"status":"audio ok"})
