@@ -118,6 +118,50 @@ def _parse_v3(data: bytes) -> RobloxMesh:
     return RobloxMesh(verts, norms, uvs, faces, version="3.00")
 
 
+
+def _parse_v4(data: bytes) -> "RobloxMesh":
+    """Version 4.0x — binary header (verified): 24-byte header dgn LOD/bone/subset fields,
+    40-byte vertex (9 float pos/normal/uv + 4 byte RGBA color), 12-byte face (3x uint32).
+    LOD offsets array (numLods x uint32) adalah BOUNDARY KUMULATIF, bukan length:
+    LOD0 = faces[offsets[0]:offsets[1]] (level paling detail).
+    Ref: devforum.roblox.com/t/roblox-mesh-format/326114
+    """
+    pos = 13  # skip "version 4.0X\n"
+    header_size = struct.unpack("<H", data[pos:pos+2])[0]
+    num_verts = struct.unpack("<I", data[pos+4:pos+8])[0]
+    num_faces = struct.unpack("<I", data[pos+8:pos+12])[0]
+    num_lods = struct.unpack("<H", data[pos+12:pos+14])[0]
+
+    vstart = pos + header_size
+    vertices, normals, uvs = [], [], []
+    p = vstart
+    for _ in range(num_verts):
+        px,py,pz,nx,ny,nz,tu,tv,tw = struct.unpack("<9f", data[p:p+36])
+        vertices.append((px,py,pz))
+        normals.append((nx,ny,nz))
+        uvs.append((tu, 1.0-tv))
+        p += 40
+
+    fstart = p
+    faces_all = []
+    for _ in range(num_faces):
+        a,b,c = struct.unpack("<3I", data[p:p+12])
+        faces_all.append((a,b,c))
+        p += 12
+
+    lod_offsets = []
+    for _ in range(num_lods):
+        lod_offsets.append(struct.unpack("<I", data[p:p+4])[0])
+        p += 4
+
+    if len(lod_offsets) >= 2:
+        faces = faces_all[lod_offsets[0]:lod_offsets[1]]
+    else:
+        faces = faces_all
+
+    return RobloxMesh(vertices=vertices, normals=normals, uvs=uvs, faces=faces, version="4.0x")
+
+
 def parse_mesh(data: bytes, name: str = "mesh") -> RobloxMesh:
     """
     Deteksi versi dan parse mesh Roblox.
@@ -128,16 +172,23 @@ def parse_mesh(data: bytes, name: str = "mesh") -> RobloxMesh:
 
     header = data[:16].decode("utf-8", errors="replace")
 
-    if "version 1.00" in header:
+    if "version 1." in header:
         mesh = _parse_v1(data)
-    elif "version 2.00" in header:
+    elif "version 2." in header:
         mesh = _parse_v2(data)
-    elif "version 3.00" in header or "version 4.00" in header or "version 5.00" in header:
-        # v4 dan v5 memiliki skinning data, kita parse geometry saja seperti v3
+    elif "version 4." in header or "version 5." in header:
+        # v4.xx/v5.xx - binary header verified, LOD0 extraction
+        try:
+            mesh = _parse_v4(data)
+        except Exception:
+            try:
+                mesh = _parse_v3(data)
+            except Exception:
+                mesh = _parse_v2(data)
+    elif "version 3." in header:
         try:
             mesh = _parse_v3(data)
         except Exception:
-            # fallback ke v2 parser
             mesh = _parse_v2(data)
     else:
         raise ValueError(f"Format mesh Roblox tidak dikenal: {header[:20]!r}")
