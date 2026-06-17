@@ -970,6 +970,73 @@ function showApiError(elId, err){
 
 document.getElementById("audio-input").addEventListener("keydown",e=>{ if(e.key==="Enter") fetchAudio(); });
 
+// ── 3D MODEL (create.roblox.com) ──────────────────────────────────
+let currentModelData = null;
+
+function extractAssetId(input) {
+  input = input.trim();
+  const m = input.match(/(?:create\.roblox\.com\/.*?\/)?(\d{5,})/);
+  return m ? m[1] : input;
+}
+
+async function fetchModelInfo(){
+  const raw = document.getElementById("model-input").value.trim();
+  if(!raw){ document.getElementById("model-status").textContent = "Masukkan Asset ID atau URL."; return; }
+  const id = extractAssetId(raw);
+  const btn = document.getElementById("model-btn");
+  btn.disabled = true;
+  document.getElementById("model-status").textContent = "⏳ Menganalisis model...";
+  document.getElementById("model-result").style.display = "none";
+
+  try{
+    const res = await fetch(`${BASE}/api/v2/model/info?id=${encodeURIComponent(id)}`);
+    const txt = await res.text();
+    let data; try{ data = JSON.parse(txt); }catch(_){ throw new Error("Response bukan JSON: "+txt.substring(0,150)); }
+    if(!res.ok && !("supported" in data)){ throw new Error(data.error || res.statusText); }
+
+    currentModelData = data;
+
+    const badge = document.getElementById("model-support-badge");
+    const buildBtn = document.getElementById("model-build-btn");
+    if(data.supported){
+      badge.innerHTML = '<span style="color:#00ff99">✓ DIDUKUNG</span> — model sederhana, siap dibangun';
+      buildBtn.disabled = false;
+      buildBtn.style.opacity = "1";
+    } else {
+      badge.innerHTML = '<span style="color:#ff5555">✗ TIDAK DIDUKUNG</span> — di luar scope MVP saat ini';
+      buildBtn.disabled = true;
+      buildBtn.style.opacity = "0.5";
+    }
+
+    document.getElementById("model-meshpart-count").textContent = data.meshPartCount ?? "—";
+    document.getElementById("model-part-count").textContent = data.partCount ?? "—";
+    document.getElementById("model-union-count").textContent = data.unionCount ?? "—";
+    document.getElementById("model-total-count").textContent = data.totalParts ?? "—";
+
+    const reasonsEl = document.getElementById("model-reasons");
+    if(data.reasons && data.reasons.length){
+      reasonsEl.innerHTML = data.reasons.map(r => "⚠ "+r).join("<br>");
+    } else {
+      reasonsEl.textContent = "";
+    }
+
+    document.getElementById("model-result").style.display = "block";
+    document.getElementById("model-status").textContent = data.supported
+      ? "✓ Model dapat diproses."
+      : "⚠ Model tidak memenuhi kriteria MVP.";
+  }catch(e){
+    document.getElementById("model-status").textContent = "✗ " + e.message;
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+async function buildModelGLB(){
+  document.getElementById("model-status").textContent = "🚧 Fitur Build GLB sedang dikembangkan — segera hadir!";
+}
+
+document.getElementById("model-input").addEventListener("keydown", e=>{ if(e.key==="Enter") fetchModelInfo(); });
+
 // ── TEXTURE GENERATOR ────────────────────────────────────────────
 let texCanvas = null;
 
