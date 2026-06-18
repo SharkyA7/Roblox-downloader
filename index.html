@@ -199,12 +199,75 @@ footer{text-align:center;padding:18px;font-size:9px;color:var(--gray);border-top
 <script type="module">
 import * as THREE from 'three';
 import { OBJLoader } from 'three/addons/loaders/OBJLoader.js';
+import { MTLLoader } from 'three/addons/loaders/MTLLoader.js';
 import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
 
 window.__threeReady = true;
 window.THREE = THREE;
 window.__OBJLoader = OBJLoader;
 window.__GLTFExporter = GLTFExporter;
+
+window.convertZipToGLB = async function(zipBlob, baseName, statusCallback){
+  const zip = await JSZip.loadAsync(zipBlob);
+  let objText = null, mtlText = null;
+  const imageFiles = {}; // filename -> blob
+
+  for(const filename of Object.keys(zip.files)){
+    const entry = zip.files[filename];
+    if(entry.dir) continue;
+    const lower = filename.toLowerCase();
+    if(lower.endsWith(".obj")){
+      objText = await entry.async("text");
+    } else if(lower.endsWith(".mtl")){
+      mtlText = await entry.async("text");
+    } else if(lower.endsWith(".png") || lower.endsWith(".jpg") || lower.endsWith(".jpeg")){
+      imageFiles[filename.split("/").pop()] = await entry.async("blob");
+    }
+  }
+
+  if(!objText) throw new Error("ZIP tidak berisi file .obj");
+
+  const blobUrlMap = {};
+  for(const [fname, fblob] of Object.entries(imageFiles)){
+    blobUrlMap[fname] = URL.createObjectURL(fblob);
+  }
+
+  const manager = new THREE.LoadingManager();
+  manager.setURLModifier((url) => {
+    const base = url.split("/").pop();
+    return blobUrlMap[base] || url;
+  });
+
+  let root;
+  if(mtlText){
+    if(statusCallback) statusCallback("⏳ Memuat material + texture...");
+    const mtlLoader = new MTLLoader(manager);
+    const materials = mtlLoader.parse(mtlText, "");
+    materials.preload();
+    const objLoader = new OBJLoader(manager);
+    objLoader.setMaterials(materials);
+    root = objLoader.parse(objText);
+  } else {
+    const objLoader = new OBJLoader(manager);
+    root = objLoader.parse(objText);
+  }
+
+  if(statusCallback) statusCallback("⏳ Export GLB...");
+  const exporter = new GLTFExporter();
+  const glbBuffer = await new Promise((resolve, reject) => {
+    exporter.parse(root, resolve, reject, { binary: true });
+  });
+
+  for(const url of Object.values(blobUrlMap)) URL.revokeObjectURL(url);
+
+  const blob = new Blob([glbBuffer], { type: "application/octet-stream" });
+  const a = Object.assign(document.createElement("a"), {
+    href: URL.createObjectURL(blob),
+    download: `${baseName}.glb`
+  });
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
 
 window.buildModelGLB = async function(){
   const statusEl = document.getElementById("model-status");
@@ -766,11 +829,10 @@ async function downloadAvatar(format){
   if(!currentUser) return;
   const user=document.getElementById('av-input').value.trim();
   const name=currentUser.username;
-  st('av-status',`⏳ Download ${format.toUpperCase()}... (30-60 detik)`,'loading');
+  st('av-status',`⏳ Download... (30-60 detik)`,'loading');
   const btn=document.getElementById(`btn-av-${format}`);
   if(btn) btn.disabled=true;
   try{
-    // Pakai /api/v2/avatar yang sudah pakai cloudscraper + cookie
     const res=await fetch(`${BASE}/api/v2/avatar?user=${encodeURIComponent(user)}`);
     if(!res.ok){
       const t=await res.text();
@@ -778,12 +840,19 @@ async function downloadAvatar(format){
       throw e;
     }
     const blob=await res.blob();
-    const a=Object.assign(document.createElement('a'),{
-      href:URL.createObjectURL(blob),
-      download:`${name}_avatar.zip`
-    });
-    a.click(); URL.revokeObjectURL(a.href);
-    st('av-status',`✓ Download selesai! Buka ZIP → import .obj di Nomad Sculpt / Prisma 3D`,'ok');
+
+    if(format === 'gltf'){
+      if(!window.convertZipToGLB){ throw new Error("Konverter GLB belum siap, coba lagi sebentar."); }
+      await window.convertZipToGLB(blob, `${name}_avatar`, (msg) => st('av-status', msg, 'loading'));
+      st('av-status',`✓ GLB berhasil! File siap import ke Nomad Sculpt / Prisma 3D / Blender.`,'ok');
+    } else {
+      const a=Object.assign(document.createElement('a'),{
+        href:URL.createObjectURL(blob),
+        download:`${name}_avatar.zip`
+      });
+      a.click(); URL.revokeObjectURL(a.href);
+      st('av-status',`✓ Download selesai! Buka ZIP → import .obj di Nomad Sculpt / Prisma 3D`,'ok');
+    }
   }catch(e){
     showApiError('av-status', e.error?e:{message:e.message});
   }finally{
@@ -830,18 +899,26 @@ function fillCatalogInfo(d){
 
 async function downloadCatalog(format){
   if(!currentAssetId) return;
-  st('cat-status',`Mengunduh ${format.toUpperCase()} ZIP…`,'loading');
+  st('cat-status',`⏳ Mengunduh data...`,'loading');
   try{
-    const res=await fetch(`${BASE}/api/v2/item?id=${currentAssetId}&format=${encodeURIComponent(format)}`);
+    // Selalu minta versi dengan texture (gltf di backend = obj+mtl+texture bundle) sbg sumber konversi
+    const res=await fetch(`${BASE}/api/v2/item?id=${currentAssetId}&format=gltf`);
     if(!res.ok){ const e=await res.json(); throw e; }
     const blob=await res.blob();
     const name=document.getElementById('cat-name').textContent||currentAssetId;
-    const a=Object.assign(document.createElement('a'),{
-      href:URL.createObjectURL(blob),
-      download:`${name}_${format}.zip`
-    });
-    a.click(); URL.revokeObjectURL(a.href);
-    st('cat-status',`✓ Download selesai!`,'ok');
+
+    if(format === 'gltf'){
+      if(!window.convertZipToGLB){ throw new Error("Konverter GLB belum siap, coba lagi sebentar."); }
+      await window.convertZipToGLB(blob, `${name}`, (msg) => st('cat-status', msg, 'loading'));
+      st('cat-status',`✓ GLB berhasil! File siap import ke Nomad Sculpt / Prisma 3D / Blender.`,'ok');
+    } else {
+      const a=Object.assign(document.createElement('a'),{
+        href:URL.createObjectURL(blob),
+        download:`${name}_${format}.zip`
+      });
+      a.click(); URL.revokeObjectURL(a.href);
+      st('cat-status',`✓ Download selesai!`,'ok');
+    }
   }catch(e){ showApiError('cat-status', e.error?e:{message:e.message}); }
 }
 
