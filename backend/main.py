@@ -460,19 +460,70 @@ def decode_color3uint8_array(raw, count):
     return out
 
 
-def decode_cframe_positions(raw, count):
+# Official 24-entry special rotation ID table (rbx-dom binary.md spec, "Version 0").
+# Rotations in degrees, applied in composite order Y -> X -> Z.
+ROTATION_ID_TABLE = {
+    0x02: (0, 0, 0),     0x03: (90, 0, 0),    0x05: (0, 180, 180), 0x06: (-90, 0, 0),
+    0x07: (0, 180, 90),  0x09: (0, 90, 90),   0x0a: (0, 0, 90),    0x0c: (0, -90, 90),
+    0x0d: (-90, -90, 0), 0x0e: (0, -90, 0),   0x10: (90, -90, 0),  0x11: (0, 90, 180),
+    0x14: (0, 180, 0),   0x15: (-90, -180, 0),0x17: (0, 0, 180),   0x18: (90, 180, 0),
+    0x19: (0, 0, -90),   0x1b: (0, -90, -90), 0x1c: (0, -180, -90),0x1e: (0, 90, -90),
+    0x1f: (90, 90, 0),   0x20: (0, 90, 0),    0x22: (-90, 90, 0),  0x23: (0, -90, 180),
+}
+
+def _euler_yxz_to_matrix(rx_deg, ry_deg, rz_deg):
+    """Build 3x3 rotation matrix from Euler angles, composite order Y->X->Z (R = Rz @ Rx @ Ry)."""
+    import math
+    rx, ry, rz = math.radians(rx_deg), math.radians(ry_deg), math.radians(rz_deg)
+    cx, sx = math.cos(rx), math.sin(rx)
+    cy, sy = math.cos(ry), math.sin(ry)
+    cz, sz = math.cos(rz), math.sin(rz)
+    Rx = [[1,0,0],[0,cx,-sx],[0,sx,cx]]
+    Ry = [[cy,0,sy],[0,1,0],[-sy,0,cy]]
+    Rz = [[cz,-sz,0],[sz,cz,0],[0,0,1]]
+    def matmul(A,B):
+        return [[sum(A[i][k]*B[k][j] for k in range(3)) for j in range(3)] for i in range(3)]
+    R = matmul(matmul(Rz, Rx), Ry)
+    return [R[0][0],R[0][1],R[0][2], R[1][0],R[1][1],R[1][2], R[2][0],R[2][1],R[2][2]]
+
+
+def decode_cframe_full(raw, count):
     """
-    Position component VERIFIED 763/763 sane on test asset.
-    Structure: [N rotation_id bytes][raw 9-float matrices for non-table rotations, variable count]
-               [position XYZ block - ALWAYS the trailing count*12 bytes, regardless of matrix count]
-    Rotation NOT decoded for MVP - returns identity matrix + raw rotation_id for diagnostics.
-    Note: position block size is fixed (count*12) and always at the END of the CFrame property,
-    so we slice from the end rather than computing offset from rotation_id==0 count.
+    VERIFIED CORRECT (confirmed via official rbx-dom spec + empirical byte-accounting match).
+    Structure is SEQUENTIAL per-instance: [ID_0][matrix_0 if ID_0==0][ID_1][matrix_1 if ID_1==0]...
+    followed by a separate Position Vector3 array (interleaved+Roblox-float, trailing count*12 bytes).
+    Raw matrix (ID==0) is plain little-endian sequential float32, NOT interleaved/transformed.
+    ID!=0 uses the 24-entry ROTATION_ID_TABLE (official spec) converted to a matrix via Euler angles.
+    Returns: positions (list of (x,y,z)), rotations (list of dicts: status/value/rawRotationId)
     """
-    rotation_ids = list(raw[:count])
+    p = 0
+    rotation_ids = []
+    raw_matrices = {}
+    for i in range(count):
+        rid = raw[p]; p += 1
+        rotation_ids.append(rid)
+        if rid == 0:
+            raw_matrices[i] = raw[p:p+36]
+            p += 36
+
     pos_block = raw[-(count * 12):]
     positions = decode_vector3_array(pos_block, count)
-    return positions, rotation_ids
+
+    rotations = []
+    for i in range(count):
+        rid = rotation_ids[i]
+        if rid == 0:
+            m = raw_matrices[i]
+            vals = [struct.unpack("<f", m[j*4:j*4+4])[0] for j in range(9)]
+            rotations.append({"status": "decoded", "value": [round(v,6) for v in vals], "rawRotationId": 0})
+        elif rid in ROTATION_ID_TABLE:
+            rx, ry, rz = ROTATION_ID_TABLE[rid]
+            vals = _euler_yxz_to_matrix(rx, ry, rz)
+            rotations.append({"status": "decoded", "value": [round(v,6) for v in vals], "rawRotationId": rid})
+        else:
+            rotations.append({"status": "unknown-id", "value": [1,0,0,0,1,0,0,0,1], "rawRotationId": rid})
+
+    return positions, rotations
 
 
 def decode_bool_array(raw, count):
@@ -1301,9 +1352,9 @@ def model_info():
 
             _, cf_raw = find_prop_chunk(chunks, type_id, "CFrame")
             if cf_raw:
-                positions, rot_ids = decode_cframe_positions(cf_raw, count)
+                positions, rotations = decode_cframe_full(cf_raw, count)
             else:
-                positions, rot_ids = [(0.0,0.0,0.0)]*count, [0]*count
+                positions, rotations = [(0.0,0.0,0.0)]*count, [{"status":"identity-fallback","value":[1,0,0,0,1,0,0,0,1],"rawRotationId":None}]*count
 
             _, name_raw = find_prop_chunk(chunks, type_id, "Name")
             names = decode_string_array(name_raw, count) if name_raw else [f"{class_name}{i}" for i in range(count)]
@@ -1325,7 +1376,7 @@ def model_info():
                     "meshId": mesh_ids[i],
                     "position": {"status": "decoded", "value": [round(v,4) for v in positions[i]]},
                     "size": {"status": "decoded", "value": [round(v,4) for v in sizes[i]]},
-                    "rotation": {"status": "identity-fallback", "value": [1,0,0,0,1,0,0,0,1], "rawRotationId": rot_ids[i]},
+                    "rotation": rotations[i],
                     "color": {"status": "best-effort", "value": list(colors[i])}
                 })
 
