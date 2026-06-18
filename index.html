@@ -257,6 +257,23 @@ window.buildModelGLB = async function(){
       if(geometry) meshGeomCache[meshId] = geometry;
     });
 
+    // Fetch texture images untuk MeshPart yang punya TextureID
+    const uniqueTextureIds = [...new Set(meshParts.map(p => p.textureId).filter(Boolean))];
+    const textureCache = {};
+    if(uniqueTextureIds.length > 0){
+      statusEl.textContent = `⏳ Mengunduh ${uniqueTextureIds.length} texture...`;
+      await fetchPool(uniqueTextureIds, 6, async (texId) => {
+        const res = await fetch(`${BASE}/api/v2/model/texture?textureId=${encodeURIComponent(texId)}`);
+        if(!res.ok) throw new Error("texture fetch failed");
+        const blob = await res.blob();
+        const bitmap = await createImageBitmap(blob);
+        const texture = new THREE.Texture(bitmap);
+        texture.needsUpdate = true;
+        if(THREE.SRGBColorSpace) texture.colorSpace = THREE.SRGBColorSpace;
+        textureCache[texId] = texture;
+      });
+    }
+
     statusEl.textContent = "⏳ Menyusun model...";
     const root = new THREE.Group();
     root.name = `model_${data.assetId}`;
@@ -282,7 +299,12 @@ window.buildModelGLB = async function(){
       const geom = meshGeomCache[part.meshId];
       if(!geom){ skippedParts++; continue; }
       const [r,g,b] = part.color.value;
-      const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(r/255, g/255, b/255) });
+      const matOpts = { color: new THREE.Color(r/255, g/255, b/255) };
+      if(part.textureId && textureCache[part.textureId]){
+        matOpts.map = textureCache[part.textureId];
+        matOpts.color = new THREE.Color(1,1,1);
+      }
+      const mat = new THREE.MeshStandardMaterial(matOpts);
       const mesh = new THREE.Mesh(geom.clone(), mat);
       applyTransform(mesh, part);
       mesh.name = part.name || "MeshPart";

@@ -1363,11 +1363,16 @@ def model_info():
             colors = decode_color3uint8_array(color_raw, count) if color_raw else [(163,162,165)]*count
 
             mesh_ids = [None]*count
+            texture_ids = [None]*count
             if class_name == "MeshPart":
                 _, mid_raw = find_prop_chunk(chunks, type_id, "MeshId")
                 if mid_raw:
                     raw_ids = decode_string_array(mid_raw, count)
                     mesh_ids = [m if m else None for m in raw_ids]
+                _, tex_raw = find_prop_chunk(chunks, type_id, "TextureID")
+                if tex_raw:
+                    raw_tex = decode_string_array(tex_raw, count)
+                    texture_ids = [t if t else None for t in raw_tex]
 
             for i in range(count):
                 parts.append({
@@ -1377,7 +1382,8 @@ def model_info():
                     "position": {"status": "decoded", "value": [round(v,4) for v in positions[i]]},
                     "size": {"status": "decoded", "value": [round(v,4) for v in sizes[i]]},
                     "rotation": rotations[i],
-                    "color": {"status": "best-effort", "value": list(colors[i])}
+                    "color": {"status": "best-effort", "value": list(colors[i])},
+                    "textureId": texture_ids[i]
                 })
 
         decode_class(meshpart_tid, meshpart_count, "MeshPart")
@@ -1450,6 +1456,36 @@ def debug_thumbnail3d():
         return jsonify({"status": r.status_code, "body": r.text[:1000]})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.get("/api/v2/model/texture")
+def model_texture():
+    """Fetch texture image untuk MeshPart (dari TextureID di manifest). Proxy langsung sebagai binary image."""
+    raw_id = request.args.get("textureId", "")
+    if not raw_id:
+        return jsonify({"error": "textureId required"}), 400
+    try:
+        clean_id = raw_id.replace("rbxassetid://", "").strip()
+        tex_asset_id = int(clean_id)
+    except ValueError:
+        return jsonify({"error": "textureId tidak valid"}), 400
+
+    try:
+        s = get_scraper()
+        r = s.get(f"https://assetdelivery.roblox.com/v1/asset/?id={tex_asset_id}", timeout=20)
+        if r.status_code != 200:
+            return jsonify({"error": f"Gagal download texture (HTTP {r.status_code})"}), 502
+
+        content = r.content
+        ctype = "image/png"
+        if content[:2] == b"\xff\xd8":
+            ctype = "image/jpeg"
+        elif content[:8] == b"\x89PNG\r\n\x1a\n":
+            ctype = "image/png"
+
+        return Response(content, mimetype=ctype)
+    except Exception as e:
+        return handle_roblox_error(e, "model_texture")
 
 
 if __name__ == "__main__":
