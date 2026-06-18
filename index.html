@@ -241,12 +241,34 @@ window.convertZipToGLB = async function(zipBlob, baseName, statusCallback){
   let root;
   if(mtlText){
     if(statusCallback) statusCallback("⏳ Memuat material + texture...");
+    const hasTextureRefs = /map_[A-Za-z]+/.test(mtlText);
+
+    const loadPromise = hasTextureRefs ? new Promise((resolve) => {
+      let resolved = false;
+      manager.onLoad = () => { if(!resolved){ resolved = true; resolve(); } };
+      // safety timeout - jangan hang selamanya kalau onLoad tidak pernah trigger
+      setTimeout(() => { if(!resolved){ resolved = true; resolve(); } }, 15000);
+    }) : Promise.resolve();
+
     const mtlLoader = new MTLLoader(manager);
     const materials = mtlLoader.parse(mtlText, "");
     materials.preload();
+
     const objLoader = new OBJLoader(manager);
     objLoader.setMaterials(materials);
     root = objLoader.parse(objText);
+
+    await loadPromise;
+
+    // Pastikan setiap texture image benar2 sudah decode (naturalWidth>0) sebelum export
+    root.traverse((child) => {
+      if(child.isMesh && child.material && child.material.map){
+        const img = child.material.map.image;
+        if(!img || (img.complete === false) || (img.naturalWidth === 0 && img.width === 0)){
+          child.material.map = null; // drop texture yg gagal load, fallback ke warna solid
+        }
+      }
+    });
   } else {
     const objLoader = new OBJLoader(manager);
     root = objLoader.parse(objText);
