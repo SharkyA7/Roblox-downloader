@@ -1487,6 +1487,40 @@ def model_texture():
         return handle_roblox_error(e, "model_texture")
 
 
+@app.get("/api/v2/model/download")
+def model_download():
+    """Download raw .rbxm file langsung dari Roblox - no limit, no conversion."""
+    aid = request.args.get("id", "")
+    if not aid:
+        return jsonify({"error": "id required"}), 400
+
+    m = re.search(r"(\d{5,})", aid)
+    if not m:
+        return jsonify({"error": "id tidak valid"}), 400
+    asset_id = int(m.group(1))
+
+    try:
+        s = get_scraper()
+        r = s.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=30)
+        if r.status_code != 200:
+            return jsonify({"error": f"Gagal download asset (HTTP {r.status_code})"}), 502
+
+        content = r.content
+        if not content:
+            return jsonify({"error": "File kosong"}), 502
+
+        return Response(
+            content,
+            mimetype="application/octet-stream",
+            headers={
+                "Content-Disposition": f'attachment; filename="{asset_id}.rbxm"',
+                "Content-Length": str(len(content))
+            }
+        )
+    except Exception as e:
+        return handle_roblox_error(e, "model_download")
+
+
 if __name__ == "__main__":
     port=int(os.getenv("PORT",8000))
     print(f"Server jalan di http://0.0.0.0:{port}")
