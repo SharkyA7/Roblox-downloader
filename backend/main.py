@@ -1521,6 +1521,121 @@ def model_download():
         return handle_roblox_error(e, "model_download")
 
 
+@app.post("/api/v2/model/convert")
+def model_convert():
+    """Parse uploaded .rbxm file dan return manifest (sama seperti model/info tapi dari upload, bukan fetch Roblox).
+    Tidak butuh cookie/scraper - file di-upload langsung oleh user."""
+    if 'file' not in request.files:
+        return jsonify({"error": "Tidak ada file yang di-upload"}), 400
+
+    f = request.files['file']
+    if not f.filename:
+        return jsonify({"error": "Nama file kosong"}), 400
+    if not f.filename.lower().endswith(('.rbxm', '.rbxmx')):
+        return jsonify({"error": "Hanya file .rbxm yang didukung"}), 400
+
+    try:
+        data = f.read()
+        if len(data) == 0:
+            return jsonify({"error": "File kosong"}), 400
+        if len(data) > 50 * 1024 * 1024:  # 50MB max
+            return jsonify({"error": "File terlalu besar (maks 50MB)"}), 400
+
+        try:
+            chunks, num_types, num_instances = parse_chunks(data)
+        except RBXMParseError as e:
+            return jsonify({"error": str(e), "supported": False}), 422
+
+        type_map = parse_inst_chunks(chunks)
+
+        meshpart_tid = part_tid = union_tid = None
+        for tid, info in type_map.items():
+            cn = info["class_name"]
+            if cn == "MeshPart": meshpart_tid = tid
+            elif cn == "Part": part_tid = tid
+            elif cn == "UnionOperation": union_tid = tid
+
+        meshpart_count = type_map.get(meshpart_tid, {}).get("count", 0) if meshpart_tid is not None else 0
+        part_count = type_map.get(part_tid, {}).get("count", 0) if part_tid is not None else 0
+        union_count = type_map.get(union_tid, {}).get("count", 0) if union_tid is not None else 0
+        total_parts = meshpart_count + part_count
+
+        reasons = []
+        if union_count > 0:
+            reasons.append(f"Asset menggunakan UnionOperation/CSG ({union_count}x) - belum didukung")
+        if total_parts > 100:
+            reasons.append(f"Asset terlalu kompleks ({total_parts} parts, maksimum 100)")
+        if total_parts == 0:
+            reasons.append("Tidak ada MeshPart/Part ditemukan")
+
+        supported = (union_count == 0) and (0 < total_parts <= 100)
+
+        parts = []
+
+        def decode_class(type_id, count, class_name):
+            if type_id is None or count == 0:
+                return
+            _, size_raw = find_prop_chunk(chunks, type_id, "size")
+            sizes = decode_vector3_array(size_raw, count) if size_raw else [(1.0,1.0,1.0)]*count
+
+            _, cf_raw = find_prop_chunk(chunks, type_id, "CFrame")
+            if cf_raw:
+                positions, rotations = decode_cframe_full(cf_raw, count)
+            else:
+                positions = [(0.0,0.0,0.0)]*count
+                rotations = [{"status":"identity-fallback","value":[1,0,0,0,1,0,0,0,1],"rawRotationId":None}]*count
+
+            _, name_raw = find_prop_chunk(chunks, type_id, "Name")
+            names = decode_string_array(name_raw, count) if name_raw else [f"{class_name}{i}" for i in range(count)]
+
+            _, color_raw = find_prop_chunk(chunks, type_id, "Color3uint8")
+            colors = decode_color3uint8_array(color_raw, count) if color_raw else [(163,162,165)]*count
+
+            mesh_ids = [None]*count
+            texture_ids = [None]*count
+            if class_name == "MeshPart":
+                _, mid_raw = find_prop_chunk(chunks, type_id, "MeshId")
+                if mid_raw:
+                    raw_ids = decode_string_array(mid_raw, count)
+                    mesh_ids = [m if m else None for m in raw_ids]
+                _, tex_raw = find_prop_chunk(chunks, type_id, "TextureID")
+                if tex_raw:
+                    raw_tex = decode_string_array(tex_raw, count)
+                    texture_ids = [t if t else None for t in raw_tex]
+
+            for i in range(count):
+                parts.append({
+                    "name": names[i],
+                    "className": class_name,
+                    "meshId": mesh_ids[i],
+                    "textureId": texture_ids[i],
+                    "position": {"status": "decoded", "value": [round(v,4) for v in positions[i]]},
+                    "size": {"status": "decoded", "value": [round(v,4) for v in sizes[i]]},
+                    "rotation": rotations[i],
+                    "color": {"status": "best-effort", "value": list(colors[i])}
+                })
+
+        decode_class(meshpart_tid, meshpart_count, "MeshPart")
+        decode_class(part_tid, part_count, "Part")
+
+        return jsonify({
+            "assetId": f.filename.replace('.rbxm','').replace('.rbxmx',''),
+            "filename": f.filename,
+            "fileSize": len(data),
+            "supported": supported,
+            "reasons": reasons,
+            "meshPartCount": meshpart_count,
+            "partCount": part_count,
+            "unionCount": union_count,
+            "totalParts": total_parts,
+            "parts": parts
+        })
+
+    except Exception as e:
+        import traceback
+        return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
 if __name__ == "__main__":
     port=int(os.getenv("PORT",8000))
     print(f"Server jalan di http://0.0.0.0:{port}")
