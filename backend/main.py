@@ -335,6 +335,99 @@ def cache_set(key, val):
 API_KEY = os.getenv("ROBLOX_API_KEY","")
 TIMEOUT = 15
 
+
+def parse_rbxmx(data):
+    """Parse RBXMX (XML format) Roblox model file.
+    Jauh lebih sederhana dari binary RBXM - semua nilai langsung terbaca sebagai teks.
+    Return: dict dengan format sama seperti parse_rbxm_binary (compatible dengan model_convert/model_info)
+    """
+    import xml.etree.ElementTree as ET
+
+    root = ET.fromstring(data.decode('utf-8', 'replace'))
+
+    TARGET_CLASSES = {'MeshPart', 'Part', 'UnionOperation'}
+    counts = {'MeshPart': 0, 'Part': 0, 'UnionOperation': 0}
+    parts = []
+
+    def get_text(props, tag, attr_name):
+        el = props.find(f"{tag}[@name='{attr_name}']")
+        return el.text.strip() if el is not None and el.text else None
+
+    def get_float(props, tag, attr_name):
+        t = get_text(props, tag, attr_name)
+        try: return float(t) if t else 0.0
+        except: return 0.0
+
+    def parse_color3uint8(props):
+        el = props.find("Color3uint8[@name='Color3uint8']")
+        if el is None:
+            return [163, 162, 165]
+        r = int(el.find('R').text or 163)
+        g = int(el.find('G').text or 162)
+        b = int(el.find('B').text or 165)
+        return [r, g, b]
+
+    def parse_cframe(props, cf_name='CFrame'):
+        cf = props.find(f"CoordinateFrame[@name='{cf_name}']")
+        if cf is None:
+            return [0.0, 0.0, 0.0], [1,0,0,0,1,0,0,0,1], "identity-fallback"
+        try:
+            x = float(cf.find('X').text or 0)
+            y = float(cf.find('Y').text or 0)
+            z = float(cf.find('Z').text or 0)
+            r = [float(cf.find(f'R{i}{j}').text or (1 if i==j else 0)) for i in range(3) for j in range(3)]
+            return [x,y,z], r, "decoded"
+        except:
+            return [0.0,0.0,0.0], [1,0,0,0,1,0,0,0,1], "identity-fallback"
+
+    def parse_vector3(props, attr_name):
+        el = props.find(f"Vector3[@name='{attr_name}']")
+        if el is None:
+            return [1.0, 1.0, 1.0]
+        try:
+            return [float(el.find('X').text or 1), float(el.find('Y').text or 1), float(el.find('Z').text or 1)]
+        except:
+            return [1.0, 1.0, 1.0]
+
+    for item in root.iter('Item'):
+        cls = item.get('class')
+        if cls not in TARGET_CLASSES:
+            continue
+        counts[cls] = counts.get(cls, 0) + 1
+        props = item.find('Properties')
+        if props is None:
+            continue
+
+        name = get_text(props, 'string', 'Name') or cls
+        pos, rot_val, rot_status = parse_cframe(props, 'CFrame')
+        size = parse_vector3(props, 'size')
+        color = parse_color3uint8(props)
+
+        mesh_id = None
+        texture_id = None
+        if cls == 'MeshPart':
+            mesh_id = get_text(props, 'string', 'MeshId')
+            texture_id = get_text(props, 'string', 'TextureID')
+
+        parts.append({
+            "name": name,
+            "className": cls,
+            "meshId": mesh_id,
+            "textureId": texture_id,
+            "position": {"status": "decoded", "value": [round(v,4) for v in pos]},
+            "size": {"status": "decoded", "value": [round(v,4) for v in size]},
+            "rotation": {"status": rot_status, "value": [round(v,6) for v in rot_val], "rawRotationId": None},
+            "color": {"status": "decoded", "value": color}
+        })
+
+    return {
+        "meshPartCount": counts['MeshPart'],
+        "partCount": counts['Part'],
+        "unionCount": counts['UnionOperation'],
+        "parts": parts
+    }
+
+
 # ── INLINED RBXM PARSER (avoids services.rbxm_parser import issue on Vercel) ──
 class RBXMParseError(Exception):
     pass
@@ -1313,24 +1406,39 @@ def model_info():
 
         data = r.content
 
-        try:
-            chunks, num_types, num_instances = parse_chunks(data)
-        except RBXMParseError as e:
-            return jsonify({"error": str(e), "supported": False}), 422
+        # Detect format: XML (rbxmx) vs Binary (rbxm)
+        is_xml = data[:20].lstrip().startswith(b'<roblox') and not data[:8] == b'<roblox!'
 
-        type_map = parse_inst_chunks(chunks)
+        if is_xml:
+            try:
+                parsed = parse_rbxmx(data)
+            except Exception as e:
+                return jsonify({"error": f"Gagal parse XML: {str(e)}", "supported": False}), 422
+            meshpart_count = parsed["meshPartCount"]
+            part_count = parsed["partCount"]
+            union_count = parsed["unionCount"]
+            total_parts = meshpart_count + part_count
+            pre_parts = parsed["parts"]
+        else:
+            try:
+                chunks, num_types, num_instances = parse_chunks(data)
+            except RBXMParseError as e:
+                return jsonify({"error": str(e), "supported": False}), 422
 
-        meshpart_tid = part_tid = union_tid = None
-        for tid, info in type_map.items():
-            cn = info["class_name"]
-            if cn == "MeshPart": meshpart_tid = tid
-            elif cn == "Part": part_tid = tid
-            elif cn == "UnionOperation": union_tid = tid
+            type_map = parse_inst_chunks(chunks)
 
-        meshpart_count = type_map.get(meshpart_tid, {}).get("count", 0) if meshpart_tid is not None else 0
-        part_count = type_map.get(part_tid, {}).get("count", 0) if part_tid is not None else 0
-        union_count = type_map.get(union_tid, {}).get("count", 0) if union_tid is not None else 0
-        total_parts = meshpart_count + part_count
+            meshpart_tid = part_tid = union_tid = None
+            for tid, info in type_map.items():
+                cn = info["class_name"]
+                if cn == "MeshPart": meshpart_tid = tid
+                elif cn == "Part": part_tid = tid
+                elif cn == "UnionOperation": union_tid = tid
+
+            meshpart_count = type_map.get(meshpart_tid, {}).get("count", 0) if meshpart_tid is not None else 0
+            part_count = type_map.get(part_tid, {}).get("count", 0) if part_tid is not None else 0
+            union_count = type_map.get(union_tid, {}).get("count", 0) if union_tid is not None else 0
+            total_parts = meshpart_count + part_count
+            pre_parts = None
 
         reasons = []
         if union_count > 0:
@@ -1615,8 +1723,11 @@ def model_convert():
                     "color": {"status": "best-effort", "value": list(colors[i])}
                 })
 
-        decode_class(meshpart_tid, meshpart_count, "MeshPart")
-        decode_class(part_tid, part_count, "Part")
+        if pre_parts is not None:
+            parts = pre_parts
+        else:
+            decode_class(meshpart_tid, meshpart_count, "MeshPart")
+            decode_class(part_tid, part_count, "Part")
 
         return jsonify({
             "assetId": f.filename.replace('.rbxm','').replace('.rbxmx',''),
