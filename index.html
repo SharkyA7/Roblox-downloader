@@ -685,7 +685,7 @@ window.buildModelGLB = async function(customStatusEl, customBtn){
         Upload file .rbxm yang sudah kamu download → parse → export GLB. Tidak perlu ID, tidak perlu internet ke Roblox untuk parsing.
       </p>
       <input type="file" id="rbxm-file-input" accept=".rbxm,.rbxmx" style="display:none" onchange="handleRBXMUpload(event)">
-      <button class="btn" onclick="document.getElementById('rbxm-file-input').click()" style="width:100%">📁 PILIH FILE .RBXM</button>
+      <button class="btn" onclick="document.getElementById('rbxm-result').style.display='none'; document.getElementById('rbxm-upload-status').textContent=''; document.getElementById('rbxm-file-input').value=''; document.getElementById('rbxm-file-input').click()" style="width:100%">📁 PILIH FILE .RBXM</button>
       <div id="rbxm-upload-status" style="margin-top:8px;font-size:9px"></div>
       <div class="card" id="rbxm-result" style="display:none;margin-top:10px">
         <div id="rbxm-support-badge" style="font-size:11px;margin-bottom:8px"></div>
