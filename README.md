@@ -86,7 +86,9 @@ Open browser: http://localhost:8000
 | v3.00 | Binary + LOD | ✅ support|
 | v4.00 | Binary + Skinning | ✅ (geometry only) |
 | v5.00 | Binary + CSG/UNION| ✅ support |
-
+| v6.00 | Coming soon | Unavailable |
+| v7.00 | Coming soon | Unavailable |
+| v8.00 | Coming soon | Unavailable |
 ---
 
 ## Important: API Key Security
