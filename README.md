@@ -81,11 +81,11 @@ Open browser: http://localhost:8000
 
 | Version | Format | Status |
 |---------|--------|--------|
-| v1.00 | ASCII | ✅ |
-| v2.00 | Binary | ✅ |
-| v3.00 | Binary + LOD | ✅ |
+| v1.00 | ASCII | ✅ support|
+| v2.00 | Binary | ✅ support|
+| v3.00 | Binary + LOD | ✅ support|
 | v4.00 | Binary + Skinning | ✅ (geometry only) |
-| v5.00 | Binary + Blendshapes | ✅ (geometry only) |
+| v5.00 | Binary + CSG/UNION| ✅ support |
 
 ---
 
