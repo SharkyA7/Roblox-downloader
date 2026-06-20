@@ -433,6 +433,172 @@ def parse_rbxmx(data):
     }
 
 
+
+# ── CSGMDL V5 PARSER (Union/CSG geometry) ────────────────────────
+# Format reverse-engineered from krakow10/rbx_mesh (Rust)
+# V5 magic: obfuscated "CSGMDL\x05\x00\x00\x00" XOR NOISE
+# Body after magic: RAW (no XOR), unlike V2/V4
+
+CSGMDL_V5_MAGIC = b"\x15\x7d\x29\x15\x75\x6c\x35\x04\x34\x69"
+CSGMDL_V4_MAGIC = b"\x15\x7d\x29\x15\x75\x6c\x34\x04\x34\x69"
+CSGMDL_V2_MAGIC = b"\x15\x7d\x29\x15\x75\x6c\x32\x04\x34\x69"
+
+CSGMDL_OBFUSCATION_NOISE = bytes([
+    86,46,110,88,49,32,48,4,52,105,12,119,12,1,94,0,26,96,55,105,29,82,43,7,79,36,89,101,83,4,122
+])
+
+def _csgmdl_deobfuscate(data, start_offset):
+    """XOR deobfuscation for V2/V4 body (NOT needed for V5 body)."""
+    result = bytearray(data)
+    noise = CSGMDL_OBFUSCATION_NOISE
+    for i in range(len(result)):
+        result[i] ^= noise[(start_offset + i) % 31]
+    return bytes(result)
+
+def _decode_csgmdl_faces_v5(vertex_data, expected_count):
+    """Decode delta-encoded face indices (state machine from v5.rs)."""
+    indices = []
+    it = iter(vertex_data)
+    index_out = 0
+    for _ in range(expected_count):
+        v0 = next(it)
+        if v0 < 64:
+            offset = v0
+        elif v0 < 128:
+            offset = v0 - 128
+        else:
+            v1 = next(it)
+            v2 = next(it)
+            offset = int.from_bytes([v2, v1, v0 - 128, 0], 'little', signed=True)
+        index_out = (index_out + offset) & 0xFFFFFFFF
+        indices.append(index_out & 0x007FFFFF)
+    return indices
+
+def parse_csgmdl(data):
+    """Parse CSGMDL Union geometry (V2/V4/V5).
+    Returns dict: {version, vertices:[(x,y,z),...], faces:[(a,b,c),...], vertex_count, face_count}
+    Raises ValueError if format not recognized or parse fails.
+    """
+    if len(data) < 10:
+        raise ValueError("Data terlalu kecil untuk CSGMDL")
+
+    magic = data[:10]
+
+    if magic == CSGMDL_V5_MAGIC:
+        return _parse_csgmdl_v5(data)
+    elif magic == CSGMDL_V4_MAGIC:
+        return _parse_csgmdl_v2_v4(data, version=4)
+    elif magic == CSGMDL_V2_MAGIC:
+        return _parse_csgmdl_v2_v4(data, version=2)
+    else:
+        raise ValueError(f"Magic CSGMDL tidak dikenal: {magic[:10].hex()}")
+
+def _parse_csgmdl_v5(data):
+    """Parse CSGMDL V5 - body is NOT obfuscated after magic."""
+    p = 10  # skip magic
+
+    pos_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    positions = []
+    for _ in range(pos_count):
+        x, y, z = struct.unpack("<3f", data[p:p+12]); p += 12
+        positions.append((x, y, z))
+
+    normals_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    normals_len = struct.unpack("<I", data[p:p+4])[0]; p += 4
+    p += normals_count * 6  # QuantizedF32x3 = [i16;3] = 6 bytes
+
+    color_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    p += color_count * 4
+
+    normal_id_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    p += normal_id_count  # u8 each
+
+    tex_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    p += tex_count * 8  # [f32;2] = 8 bytes
+
+    tangents_count = struct.unpack("<H", data[p:p+2])[0]; p += 2
+    tangents_len = struct.unpack("<I", data[p:p+4])[0]; p += 4
+    p += tangents_count * 6
+
+    # Faces5
+    vertex_count = struct.unpack("<I", data[p:p+4])[0]; p += 4
+    vertex_data_len = struct.unpack("<I", data[p:p+4])[0]; p += 4
+    vertex_data = data[p:p+vertex_data_len]; p += vertex_data_len
+
+    range_marker_count = data[p]; p += 1
+    range_markers = []
+    for _ in range(range_marker_count):
+        range_markers.append(struct.unpack("<I", data[p:p+4])[0]); p += 4
+
+    indices = _decode_csgmdl_faces_v5(vertex_data, vertex_count)
+
+    # Use LOD0 = indices[range_markers[0]:range_markers[1]] if available
+    if len(range_markers) >= 2:
+        faces_indices = indices[range_markers[0]:range_markers[1]]
+    else:
+        faces_indices = indices
+
+    faces = [(faces_indices[i], faces_indices[i+1], faces_indices[i+2])
+             for i in range(0, len(faces_indices)-2, 3)]
+
+    return {
+        "version": "V5",
+        "vertices": positions,
+        "faces": faces,
+        "vertex_count": len(positions),
+        "face_count": len(faces)
+    }
+
+def _parse_csgmdl_v2_v4(data, version):
+    """Parse CSGMDL V2/V4 - body IS obfuscated after magic (XOR with noise)."""
+    raw = _csgmdl_deobfuscate(data[10:], start_offset=10)
+    p = 0
+
+    # Hash: 32 bytes
+    p += 32
+
+    # Mesh2: vertex_count u32, magic 84 u32, vertices, face_count u32, faces
+    vertex_count = struct.unpack("<I", raw[p:p+4])[0]; p += 4
+    magic84 = struct.unpack("<I", raw[p:p+4])[0]; p += 4  # should be 84
+
+    # Vertex = pos[f32;3] + norm[f32;3] + color[u8;4] + normal_id u32 + tex[f32;2]
+    #        + tangent magic 0u128 (16 bytes) + magic 0u128 (16 bytes) = 84 bytes total
+    positions = []
+    for _ in range(vertex_count):
+        x, y, z = struct.unpack("<3f", raw[p:p+12])
+        positions.append((x, y, z))
+        p += 84  # full vertex size
+
+    face_count_raw = struct.unpack("<I", raw[p:p+4])[0]; p += 4
+    face_count = face_count_raw // 3
+    faces = []
+    for _ in range(face_count):
+        a, b, c = struct.unpack("<3I", raw[p:p+12])
+        faces.append((a, b, c)); p += 12
+
+    if version == 4:
+        unknown_count = struct.unpack("<I", raw[p:p+4])[0]; p += 4
+        p += unknown_count * 4
+
+    return {
+        "version": f"V{version}",
+        "vertices": positions,
+        "faces": faces,
+        "vertex_count": len(positions),
+        "face_count": len(faces)
+    }
+
+def csgmdl_to_obj(mesh_data, name="union_mesh"):
+    """Convert parsed CSGMDL data to OBJ string."""
+    lines = [f"# CSG Union mesh - {mesh_data['version']} ({mesh_data['vertex_count']} verts, {mesh_data['face_count']} faces)"]
+    lines.append(f"o {name}")
+    for x, y, z in mesh_data["vertices"]:
+        lines.append(f"v {x:.6f} {y:.6f} {z:.6f}")
+    for a, b, c in mesh_data["faces"]:
+        lines.append(f"f {a+1} {b+1} {c+1}")
+    return "\n".join(lines)
+
+
 # ── INLINED RBXM PARSER (avoids services.rbxm_parser import issue on Vercel) ──
 class RBXMParseError(Exception):
     pass
@@ -1765,6 +1931,73 @@ def model_convert():
     except Exception as e:
         import traceback
         return jsonify({"error": str(e), "traceback": traceback.format_exc()}), 500
+
+
+@app.get("/api/v2/model/mesh-union")
+def model_mesh_union():
+    """Fetch dan decode geometry Union/CSG dari AssetId (nested RBXM + CSGMDL).
+    Dipanggil per-UnionOperation dari browser saat assembly GLB."""
+    raw_id = request.args.get("assetId", "")
+    if not raw_id:
+        return jsonify({"error": "assetId required"}), 400
+
+    m = re.search(r"(\d{4,})", raw_id)
+    if not m:
+        return jsonify({"error": "assetId tidak valid"}), 400
+    asset_id = int(m.group(1))
+
+    try:
+        s = get_scraper()
+        # Fetch nested RBXM (PartOperationAsset)
+        r = s.get(f"https://assetdelivery.roblox.com/v1/asset/?id={asset_id}", timeout=25)
+        if r.status_code != 200:
+            return jsonify({"error": f"Gagal fetch Union asset (HTTP {r.status_code})"}), 502
+
+        rbxm_data = r.content
+
+        # Parse nested RBXM
+        try:
+            nested_chunks, _, _ = parse_chunks(rbxm_data)
+        except RBXMParseError as e:
+            return jsonify({"error": f"Gagal parse nested RBXM: {str(e)}"}), 422
+
+        # Cari PartOperationAsset INST
+        nested_type_map = parse_inst_chunks(nested_chunks)
+        poa_tid = next((tid for tid, info in nested_type_map.items()
+                       if info["class_name"] == "PartOperationAsset"), None)
+        if poa_tid is None:
+            return jsonify({"error": "PartOperationAsset tidak ditemukan di nested RBXM"}), 422
+
+        # Ambil MeshData property
+        _, meshdata_raw = find_prop_chunk(nested_chunks, poa_tid, "MeshData")
+        if meshdata_raw is None:
+            return jsonify({"error": "MeshData property tidak ditemukan"}), 422
+
+        # Decode string (1 entry)
+        mesh_strings = decode_string_array(meshdata_raw, 1)
+        mesh_bytes = mesh_strings[0].encode("latin-1") if mesh_strings else b""
+
+        if not mesh_bytes:
+            return jsonify({"error": "MeshData kosong"}), 422
+
+        # Parse CSGMDL
+        try:
+            mesh_data = parse_csgmdl(mesh_bytes)
+        except ValueError as e:
+            return jsonify({"error": f"Gagal parse CSGMDL: {str(e)}"}), 422
+
+        obj_text = csgmdl_to_obj(mesh_data, name=f"union_{asset_id}")
+
+        return jsonify({
+            "assetId": asset_id,
+            "csgmdlVersion": mesh_data["version"],
+            "vertexCount": mesh_data["vertex_count"],
+            "faceCount": mesh_data["face_count"],
+            "obj": obj_text
+        })
+
+    except Exception as e:
+        return handle_roblox_error(e, "model_mesh_union")
 
 
 if __name__ == "__main__":
