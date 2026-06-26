@@ -854,10 +854,13 @@ const BASE = '';
 
 // ── TABS ──────────────────────────────────────────────────────────
 function switchTab(name){
-  document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['avatar','catalog','audio','model3d'][i]===name));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   const next=document.getElementById('panel-'+name);
   if(next) next.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>{
+    const oc=t.getAttribute('onclick')||'';
+    t.classList.toggle('active', oc.includes("'"+name+"'"));
+  });
   if(typeof Motion!=='undefined' && next) animatePanelCards(next);
 }
 
