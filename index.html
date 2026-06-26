@@ -861,7 +861,7 @@ function switchTab(name){
     const oc=t.getAttribute('onclick')||'';
     t.classList.toggle('active', oc.includes("'"+name+"'"));
   });
-  if(typeof Motion!=='undefined' && next) animatePanelCards(next);
+  // animatePanelCards disabled for debug
 }
 
 function toggleDropdown(e){
