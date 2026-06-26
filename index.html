@@ -862,8 +862,9 @@ function switchTab(name){
 }
 
 function toggleDropdown(e){
-  e.stopPropagation();
+  if(e) e.stopPropagation();
   const m=document.getElementById('dropdown-menu');
+  alert('toggleDropdown called, current display: ' + m.style.display);
   if(m.style.display==='none' || m.style.display===''){
     m.style.display='block';
   } else {
