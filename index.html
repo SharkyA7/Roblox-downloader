@@ -1838,9 +1838,11 @@ function initMainAnimations(){
 function animatePanelCards(panel){
   if(!panel||typeof Motion==='undefined') return;
   const { animate } = Motion;
-  Array.from(panel.querySelectorAll('.card')).forEach((card,i)=>{
-    card.style.opacity='0';card.style.transform='translateY(14px)';
-    setTimeout(()=>animate(card,{opacity:[0,1],y:[14,0]},{duration:0.38,easing:[0.22,1,0.36,1]}),i*70);
+  requestAnimationFrame(()=>{
+    Array.from(panel.querySelectorAll('.card')).forEach((card,i)=>{
+      card.style.opacity='0';card.style.transform='translateY(14px)';
+      setTimeout(()=>animate(card,{opacity:[0,1],y:[14,0]},{duration:0.38,easing:[0.22,1,0.36,1]}),i*70);
+    });
   });
 }
 function initButtonSprings(){
