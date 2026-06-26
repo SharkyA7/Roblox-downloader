@@ -856,7 +856,9 @@ const BASE = '';
 function switchTab(name){
   document.querySelectorAll('.tab').forEach((t,i)=>t.classList.toggle('active',['avatar','catalog','audio','model3d'][i]===name));
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById('panel-'+name).classList.add('active');
+  const next=document.getElementById('panel-'+name);
+  if(next) next.classList.add('active');
+  if(typeof Motion!=='undefined' && next) animatePanelCards(next);
 }
 
 function toggleDropdown(e){
@@ -1849,34 +1851,6 @@ function initButtonSprings(){
   });
 }
 document.addEventListener('DOMContentLoaded',()=>{
-  window.switchTab = function(name){
-    if(typeof Motion==='undefined'){
-      document.querySelectorAll('.panel').forEach(p=>{p.classList.remove('active');p.style.display='none';});
-      const next=document.getElementById('panel-'+name);
-      if(next){next.style.display='block';next.classList.add('active');}
-      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-      const at=Array.from(document.querySelectorAll('.tab')).find(t=>t.getAttribute('onclick')&&t.getAttribute('onclick').includes("'"+name+"'"));
-      if(at) at.classList.add('active');
-      return;
-    }
-    const { animate } = Motion;
-    const panels = document.querySelectorAll('.panel');
-    const next = document.getElementById('panel-'+name);
-    panels.forEach(p=>{
-      if(p.classList.contains('active')&&p!==next){
-        animate(p,{opacity:[1,0]},{duration:0.12}).then(()=>{p.classList.remove('active');p.style.display='none';});
-      }
-    });
-    setTimeout(()=>{
-      panels.forEach(p=>p.classList.remove('active'));
-      if(next){next.style.display='block';next.style.opacity='0';next.classList.add('active');
-        animate(next,{opacity:[0,1],y:[8,0]},{duration:0.28,easing:[0.22,1,0.36,1]});
-        animatePanelCards(next);}
-      document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-      const at=Array.from(document.querySelectorAll('.tab')).find(t=>t.getAttribute('onclick')&&t.getAttribute('onclick').includes("'"+name+"'"));
-      if(at) at.classList.add('active');
-    },120);
-  };
   if(typeof Motion!=='undefined') initMainAnimations();
 });
 </script>
