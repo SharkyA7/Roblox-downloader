@@ -857,6 +857,11 @@ function switchTab(name){
   document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
   const next=document.getElementById('panel-'+name);
   if(next) next.classList.add('active');
+  document.querySelectorAll('.tab').forEach(t=>{
+    const oc=t.getAttribute('onclick')||'';
+    t.classList.toggle('active', oc.includes("'"+name+"'"));
+  });
+  if(typeof Motion!=='undefined'&&next) animatePanelCards(next);
 }
 
 function toggleDropdown(e){
